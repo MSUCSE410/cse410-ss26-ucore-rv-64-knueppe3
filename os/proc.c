@@ -1,6 +1,8 @@
 #include "proc.h"
 #include "defs.h"
 #include "loader.h"
+#include "syscall.h"
+#include "timer.h"
 #include "trap.h"
 
 struct proc pool[NPROC];
@@ -31,9 +33,8 @@ void proc_init(void)
 		p->kstack = (uint64)kstack[p - pool];
 		p->ustack = (uint64)ustack[p - pool];
 		p->trapframe = (struct trapframe *)trapframe[p - pool];
-		/*
-		* LAB1: you may need to initialize your new fields of proc here
-		*/
+		p->taskinfo.status = UnInit;
+		p->taskinfo.time = 0;
 	}
 	idle.kstack = (uint64)boot_stack_top;
 	idle.pid = 0;
@@ -62,6 +63,7 @@ struct proc *allocproc(void)
 found:
 	p->pid = allocpid();
 	p->state = USED;
+	p->taskinfo.status = Ready;
 	memset(&p->context, 0, sizeof(p->context));
 	memset(p->trapframe, 0, PAGE_SIZE);
 	memset((void *)p->kstack, 0, PAGE_SIZE);
@@ -81,10 +83,18 @@ void scheduler(void)
 	for (;;) {
 		for (p = pool; p < &pool[NPROC]; p++) {
 			if (p->state == RUNNABLE) {
-				/*
-				* LAB1: you may need to init proc start time here
-				*/
-				p->state = RUNNING;
+
+				// logic behind time is as follows:
+				// subtract by start time, add by end time
+				// start at 0, end at 100
+				// 0 - 0 + 100 = 100
+				// start against 500, end at 700
+				// 100 - 500 = -400 + 700 = 300
+				// start again at 1100, end at 1150
+				// 300 - 1100 = -800 + 1150 = 350
+
+				p->taskinfo.time -= get_cycle() / CPU_FREQ;
+				p->taskinfo.status = Running;
 				current_proc = p;
 				swtch(&idle.context, &p->context);
 			}
@@ -111,6 +121,7 @@ void sched(void)
 void yield(void)
 {
 	current_proc->state = RUNNABLE;
+	current_proc->taskinfo.time += get_cycle() / CPU_FREQ;
 	sched();
 }
 
@@ -119,6 +130,7 @@ void exit(int code)
 {
 	struct proc *p = curr_proc();
 	infof("proc %d exit with %d", p->pid, code);
+	p->taskinfo.status = Exited;
 	p->state = UNUSED;
 	finished();
 	sched();
