@@ -82,18 +82,8 @@ void scheduler(void)
 	struct proc *p;
 	for (;;) {
 		for (p = pool; p < &pool[NPROC]; p++) {
-			if (p->state == RUNNABLE) {
-
-				// logic behind time is as follows:
-				// subtract by start time, add by end time
-				// start at 0, end at 100
-				// 0 - 0 + 100 = 100
-				// start against 500, end at 700
-				// 100 - 500 = -400 + 700 = 300
-				// start again at 1100, end at 1150
-				// 300 - 1100 = -800 + 1150 = 350
-
-				p->taskinfo.time -= get_cycle() / CPU_FREQ;
+			if (p->state == RUNNABLE) {	
+				p->taskinfo.time = (get_cycle() / CPU_FREQ) * 1000 + ((get_cycle() % CPU_FREQ) * 1000000 / CPU_FREQ) / 1000;
 				p->taskinfo.status = Running;
 				current_proc = p;
 				swtch(&idle.context, &p->context);
@@ -121,7 +111,7 @@ void sched(void)
 void yield(void)
 {
 	current_proc->state = RUNNABLE;
-	current_proc->taskinfo.time += get_cycle() / CPU_FREQ;
+	current_proc->taskinfo.status = Ready;
 	sched();
 }
 

@@ -1,7 +1,9 @@
 #include "syscall.h"
+#include "log.h"
 #include "proc.h"
 #include "defs.h"
 #include "loader.h"
+#include "sbi.h"
 #include "syscall_ids.h"
 #include "timer.h"
 #include "trap.h"
@@ -23,11 +25,6 @@ __attribute__((noreturn)) void sys_exit(int code)
 	__builtin_unreachable();
 }
 
-int sys_task_info(TaskInfo *ti)
-{
-	return 0;
-}
-
 uint64 sys_sched_yield()
 {
 	yield();
@@ -42,9 +39,19 @@ uint64 sys_gettimeofday(TimeVal *val, int _tz)
 	return 0;
 }
 
-/*
-* LAB1: you may need to define sys_task_info here
-*/
+
+int sys_task_info(TaskInfo *ti)
+{
+	ti->status = curr_proc()->taskinfo.status;
+	for (int i = 0; i < MAX_SYSCALL_NUM; ++i) {
+		ti->syscall_time[i] = curr_proc()->taskinfo.syscall_time[i];
+	}
+
+	TimeVal time;
+	sys_gettimeofday(&time, 0);
+	ti->time = curr_proc()->taskinfo.time;
+	return 0;
+}
 
 extern char trap_page[];
 
@@ -56,6 +63,8 @@ void syscall()
 			   trapframe->a3, trapframe->a4, trapframe->a5 };
 	tracef("syscall %d args = [%x, %x, %x, %x, %x, %x]", id, args[0],
 	       args[1], args[2], args[3], args[4], args[5]);
+
+	curr_proc()->taskinfo.syscall_time[id]++;
 
 	switch (id) {
 	case SYS_write:
@@ -71,10 +80,8 @@ void syscall()
 		ret = sys_gettimeofday((TimeVal *)args[0], args[1]);
 		break;
 	case SYS_task_info:
-		ret = sys_task_info(&curr_proc()->taskinfo);
+		ret = sys_task_info((TaskInfo *)args[0]);
 		break;
-
-	curr_proc()->taskinfo.syscall_time[id]++;
 
 	default:
 		ret = -1;
