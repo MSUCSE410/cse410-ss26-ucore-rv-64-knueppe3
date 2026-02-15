@@ -47,8 +47,6 @@ int sys_task_info(TaskInfo *ti)
 		ti->syscall_time[i] = curr_proc()->taskinfo.syscall_time[i];
 	}
 
-	TimeVal time;
-	sys_gettimeofday(&time, 0);
 	ti->time = curr_proc()->taskinfo.time;
 	return 0;
 }
