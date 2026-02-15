@@ -53,6 +53,17 @@ uint64 sys_gettimeofday(TimeVal *val, int _tz) // TODO: implement sys_gettimeofd
 * LAB1: you may need to define sys_task_info here
 */
 
+int sys_task_info(TaskInfo *ti)
+{
+	ti->status = curr_proc()->taskinfo.status;
+	for (int i = 0; i < MAX_SYSCALL_NUM; ++i) {
+		ti->syscall_time[i] = curr_proc()->taskinfo.syscall_time[i];
+	}
+
+	ti->time = curr_proc()->taskinfo.time;
+	return 0;
+}
+
 extern char trap_page[];
 
 void syscall()
