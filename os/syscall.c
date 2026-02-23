@@ -1,6 +1,8 @@
 #include "syscall.h"
-#include "defs.h"
+#include "defs.h" 
+#include "string.h"
 #include "loader.h"
+#include "log.h"
 #include "syscall_ids.h"
 #include "timer.h"
 #include "trap.h"
@@ -32,37 +34,32 @@ uint64 sys_sched_yield()
 	return 0;
 }
 
-uint64 sys_gettimeofday(TimeVal *val, int _tz) // TODO: implement sys_gettimeofday in pagetable. (VA to PA)
+// TODO: implement sys_gettimeofday in pagetable. (VA to PA)
+uint64 sys_gettimeofday(TimeVal *val, int _tz) 
 {
-	// YOUR CODE
-	val->sec = 0;
-	val->usec = 0;
+	uint64 cycle = get_cycle();
+	val->sec = cycle / CPU_FREQ;
+	val->usec = (cycle % CPU_FREQ) * 1000000 / CPU_FREQ;
 
-	/* The code in `ch3` will leads to memory bugs*/
+	int ret = copyout(curr_proc()->pagetable, (uint64) val, (char*) val, (uint64) sizeof(TimeVal));
+	return ret;
+}
 
-	// uint64 cycle = get_cycle();
-	// val->sec = cycle / CPU_FREQ;
-	// val->usec = (cycle % CPU_FREQ) * 1000000 / CPU_FREQ;
-	return 0;
+int sys_task_info(TaskInfo *ti)
+{
+	ti->status = curr_proc()->taskinfo.status;
+	for (int i = 0; i < MAX_SYSCALL_NUM; ++i)
+	{
+		ti->syscall_time[i] = curr_proc()->taskinfo.syscall_time[i];
+	}
+	ti->time = curr_proc()->taskinfo.time;
+
+	return copyout(curr_proc()->pagetable, (uint64) ti, (char*) ti, (uint64) sizeof(TaskInfo));
 }
 
 // TODO: add support for mmap and munmap syscall.
 // hint: read through docstrings in vm.c. Watching CH4 video may also help.
 // Note the return value and PTE flags (especially U,X,W,R)
-/*
-* LAB1: you may need to define sys_task_info here
-*/
-
-int sys_task_info(TaskInfo *ti)
-{
-	ti->status = curr_proc()->taskinfo.status;
-	for (int i = 0; i < MAX_SYSCALL_NUM; ++i) {
-		ti->syscall_time[i] = curr_proc()->taskinfo.syscall_time[i];
-	}
-
-	ti->time = curr_proc()->taskinfo.time;
-	return 0;
-}
 
 extern char trap_page[];
 
@@ -74,9 +71,9 @@ void syscall()
 			   trapframe->a3, trapframe->a4, trapframe->a5 };
 	tracef("syscall %d args = [%x, %x, %x, %x, %x, %x]", id, args[0],
 	       args[1], args[2], args[3], args[4], args[5]);
-	/*
-	* LAB1: you may need to update syscall counter for task info here
-	*/
+
+	curr_proc()->taskinfo.syscall_time[id]++;
+
 	switch (id) {
 	case SYS_write:
 		ret = sys_write(args[0], args[1], args[2]);
@@ -90,9 +87,10 @@ void syscall()
 	case SYS_gettimeofday:
 		ret = sys_gettimeofday((TimeVal *)args[0], args[1]);
 		break;
-	/*
-	* LAB1: you may need to add SYS_taskinfo case here
-	*/
+	case SYS_task_info:
+		ret = sys_task_info((TaskInfo *)args[0]);
+		break;
+
 	default:
 		ret = -1;
 		errorf("unknown syscall %d", id);

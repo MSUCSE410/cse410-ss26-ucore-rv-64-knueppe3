@@ -1,5 +1,6 @@
 #include "proc.h"
 #include "defs.h"
+#include "timer.h"
 #include "loader.h"
 #include "trap.h"
 #include "vm.h"
@@ -29,10 +30,9 @@ void proc_init(void)
 	for (p = pool; p < &pool[NPROC]; p++) {
 		p->state = UNUSED;
 		p->kstack = (uint64)kstack[p - pool];
-		p->trapframe = (struct trapframe *)trapframe[p - pool];
-		/*
-		* LAB1: you may need to initialize your new fields of proc here
-		*/
+		p->trapframe = (struct trapframe *)trapframe[p - pool];	
+		p->taskinfo.status = UnInit;
+		p->taskinfo.time = 0;
 	}
 	idle.kstack = (uint64)boot_stack_top;
 	idle.pid = 0;
@@ -63,6 +63,7 @@ found:
 	p->state = USED;
 	p->pagetable = 0;
 	p->ustack = 0;
+	p->taskinfo.status = Ready;
 	p->max_page = 0;
 	memset(&p->context, 0, sizeof(p->context));
 	memset((void *)p->kstack, 0, KSTACK_SIZE);
@@ -83,9 +84,8 @@ void scheduler(void)
 	for (;;) {
 		for (p = pool; p < &pool[NPROC]; p++) {
 			if (p->state == RUNNABLE) {
-				/*
-				* LAB1: you may need to init proc start time here
-				*/
+				p->taskinfo.time = (get_cycle() / CPU_FREQ) * 1000 + ((get_cycle() % CPU_FREQ) * 1000000 / CPU_FREQ) / 1000;
+				p->taskinfo.status = Running;
 				p->state = RUNNING;
 				current_proc = p;
 				swtch(&idle.context, &p->context);
@@ -113,12 +113,14 @@ void sched(void)
 void yield(void)
 {
 	current_proc->state = RUNNABLE;
+	current_proc->taskinfo.status = Ready;
 	sched();
 }
 
 void freeproc(struct proc *p)
 {
 	p->state = UNUSED;
+	p->taskinfo.status = Exited;
 	// uvmfree(p->pagetable, p->max_page);
 }
 
