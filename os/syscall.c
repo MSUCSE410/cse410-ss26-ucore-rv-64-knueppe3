@@ -1,11 +1,13 @@
 #include "syscall.h"
+#include "const.h"
 #include "defs.h" 
-#include "string.h"
-#include "loader.h"
+#include "proc.h"
 #include "log.h"
 #include "syscall_ids.h"
 #include "timer.h"
 #include "trap.h"
+#include "types.h"
+#include "vm.h"
 
 uint64 sys_write(int fd, uint64 va, uint len)
 {
@@ -34,27 +36,35 @@ uint64 sys_sched_yield()
 	return 0;
 }
 
-// TODO: implement sys_gettimeofday in pagetable. (VA to PA)
-uint64 sys_gettimeofday(TimeVal *val, int _tz) 
+uint64 sys_gettimeofday(uint64 *addr, int _tz) 
 {
-	uint64 cycle = get_cycle();
-	val->sec = cycle / CPU_FREQ;
-	val->usec = (cycle % CPU_FREQ) * 1000000 / CPU_FREQ;
+	// WHY THE HELL IS IT LIKE THIS
+	TimeVal timeval;
 
-	int ret = copyout(curr_proc()->pagetable, (uint64) val, (char*) val, (uint64) sizeof(TimeVal));
-	return ret;
+	uint64 cycle = get_cycle();
+	timeval.sec = cycle / CPU_FREQ;
+	timeval.usec = (cycle % CPU_FREQ) * 1000000 / CPU_FREQ;
+
+	tracef("addr %p", useraddr(curr_proc()->pagetable, *addr));
+
+	return copyout(curr_proc()->pagetable, *addr, (char*) &timeval, (uint64) sizeof(TimeVal));
 }
 
-int sys_task_info(TaskInfo *ti)
+uint64 sys_task_info(uint64 *addr)
 {
-	ti->status = curr_proc()->taskinfo.status;
+	TaskInfo ti;
+
+	ti.status = curr_proc()->taskinfo.status;
 	for (int i = 0; i < MAX_SYSCALL_NUM; ++i)
 	{
-		ti->syscall_time[i] = curr_proc()->taskinfo.syscall_time[i];
+		ti.syscall_time[i] = curr_proc()->taskinfo.syscall_time[i];
 	}
-	ti->time = curr_proc()->taskinfo.time;
+	ti.time = curr_proc()->taskinfo.time; 
 
-	return copyout(curr_proc()->pagetable, (uint64) ti, (char*) ti, (uint64) sizeof(TaskInfo));
+	tracef("addr %p", useraddr(curr_proc()->pagetable, *addr));
+	debugf("time %d", ti.time);
+
+	return copyout(curr_proc()->pagetable, *addr, (char*) &ti, (uint64) sizeof(TaskInfo));
 }
 
 // TODO: add support for mmap and munmap syscall.
@@ -85,10 +95,10 @@ void syscall()
 		ret = sys_sched_yield();
 		break;
 	case SYS_gettimeofday:
-		ret = sys_gettimeofday((TimeVal *)args[0], args[1]);
+		ret = sys_gettimeofday((uint64 *) &args[0], args[1]);
 		break;
 	case SYS_task_info:
-		ret = sys_task_info((TaskInfo *)args[0]);
+		ret = sys_task_info((uint64 *) &args[0]);
 		break;
 
 	default:

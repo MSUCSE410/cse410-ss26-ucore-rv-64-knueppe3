@@ -121,7 +121,7 @@ void freeproc(struct proc *p)
 {
 	p->state = UNUSED;
 	p->taskinfo.status = Exited;
-	// uvmfree(p->pagetable, p->max_page);
+	//uvmfree(p->pagetable, p->max_page);
 }
 
 // Exit the current process.
