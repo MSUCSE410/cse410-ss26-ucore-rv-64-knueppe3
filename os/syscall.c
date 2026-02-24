@@ -1,8 +1,10 @@
 #include "syscall.h"
 #include "const.h"
 #include "defs.h" 
+#include "kalloc.h"
 #include "proc.h"
 #include "log.h"
+#include "riscv.h"
 #include "syscall_ids.h"
 #include "timer.h"
 #include "trap.h"
@@ -36,7 +38,7 @@ uint64 sys_sched_yield()
 	return 0;
 }
 
-uint64 sys_gettimeofday(uint64 *addr, int _tz) 
+uint64 sys_gettimeofday(uint64 addr, int _tz) 
 {
 	// WHY THE HELL IS IT LIKE THIS
 	TimeVal timeval;
@@ -45,12 +47,12 @@ uint64 sys_gettimeofday(uint64 *addr, int _tz)
 	timeval.sec = cycle / CPU_FREQ;
 	timeval.usec = (cycle % CPU_FREQ) * 1000000 / CPU_FREQ;
 
-	tracef("addr %p", useraddr(curr_proc()->pagetable, *addr));
+	tracef("addr %p", useraddr(curr_proc()->pagetable, addr));
 
-	return copyout(curr_proc()->pagetable, *addr, (char*) &timeval, (uint64) sizeof(TimeVal));
+	return copyout(curr_proc()->pagetable, addr, (char*) &timeval, (uint64) sizeof(TimeVal));
 }
 
-uint64 sys_task_info(uint64 *addr)
+uint64 sys_task_info(uint64 addr)
 {
 	TaskInfo ti;
 
@@ -59,17 +61,82 @@ uint64 sys_task_info(uint64 *addr)
 	{
 		ti.syscall_time[i] = curr_proc()->taskinfo.syscall_time[i];
 	}
-	ti.time = curr_proc()->taskinfo.time; 
 
-	tracef("addr %p", useraddr(curr_proc()->pagetable, *addr));
-	debugf("time %d", ti.time);
+	uint64 sec = get_cycle() / CPU_FREQ;
+	uint64 usec = (get_cycle() % CPU_FREQ) * 1000000 / CPU_FREQ;
 
-	return copyout(curr_proc()->pagetable, *addr, (char*) &ti, (uint64) sizeof(TaskInfo));
+	ti.time = (sec * 1000 + usec / 1000) - curr_proc()->taskinfo.time;
+	tracef("addr %p", useraddr(curr_proc()->pagetable, addr));
+	tracef("time %d", ti.time);
+
+	return copyout(curr_proc()->pagetable, addr, (char*) &ti, (uint64) sizeof(TaskInfo));
 }
 
-// TODO: add support for mmap and munmap syscall.
-// hint: read through docstrings in vm.c. Watching CH4 video may also help.
-// Note the return value and PTE flags (especially U,X,W,R)
+int sys_mmap(uint64 start, uint64 len, int port, int flag, int fd)
+{
+	debugf("sys_mmap start = %d len = %d port = %d", start, len, port);
+
+	if (len < 1 || len > 1024*1024*1024 || (port & ~0x7) != 0 || (port & 0x7) == 0)
+	{
+		infof("Some error with length or port");
+		return -1;
+	}
+
+	uint64 offset = start & 0xFFF;
+	if (offset != 0)
+	{
+		return -1;
+	}
+
+	uint64 aligned_length = PGROUNDUP(len);
+
+	infof("Mapping pages");
+	while (aligned_length > 0)
+	{
+		void* pa = kalloc();
+		if ((uint64) pa == 0)
+		{
+			debugf("No physical memory");
+			return -1;
+		}
+		if (mappages(curr_proc()->pagetable, start, PGSIZE, (uint64) pa, PTE_U | (port << 1)) != 0)
+		{
+			debugf("Failed to map a page");
+			return -1;
+		}
+		aligned_length -= PGSIZE;
+		start += PGSIZE;
+	}	
+
+	return 0;
+}
+
+int sys_munmap(uint64 start, uint64 len)
+{
+	debugf("sys_munmap start = %d len = %d", start, len);
+
+	pagetable_t table = curr_proc()->pagetable; // pagetable
+	
+	// if start isn't aligned with a page start
+	if (start % PGSIZE != 0)
+	{
+		return -1;
+	}
+	
+	int num_pages = PGROUNDUP(len) / PGSIZE;
+
+	for (uint64 page = start; page < start + num_pages * PGSIZE; page += PGSIZE)
+	{	
+		if(useraddr(table, page) == 0)
+		{
+			debugf("munmap: not mapped");
+			return -1;
+		}
+		uvmunmap(table, page, 1, 0);
+	}
+
+	return 0;
+}
 
 extern char trap_page[];
 
@@ -82,7 +149,7 @@ void syscall()
 	tracef("syscall %d args = [%x, %x, %x, %x, %x, %x]", id, args[0],
 	       args[1], args[2], args[3], args[4], args[5]);
 
-	curr_proc()->taskinfo.syscall_time[id]++;
+	++curr_proc()->taskinfo.syscall_time[id];
 
 	switch (id) {
 	case SYS_write:
@@ -95,10 +162,16 @@ void syscall()
 		ret = sys_sched_yield();
 		break;
 	case SYS_gettimeofday:
-		ret = sys_gettimeofday((uint64 *) &args[0], args[1]);
+		ret = sys_gettimeofday(args[0], args[1]);
 		break;
 	case SYS_task_info:
-		ret = sys_task_info((uint64 *) &args[0]);
+		ret = sys_task_info(args[0]);
+		break;
+	case SYS_mmap:
+		ret = sys_mmap(args[0], args[1], args[2], args[3], args[4]);
+		break;
+	case SYS_munmap:
+		ret = sys_munmap(args[0], args[1]);
 		break;
 
 	default:

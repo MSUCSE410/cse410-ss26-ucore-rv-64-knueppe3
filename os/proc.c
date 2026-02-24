@@ -3,7 +3,6 @@
 #include "timer.h"
 #include "loader.h"
 #include "trap.h"
-#include "vm.h"
 
 struct proc pool[NPROC];
 __attribute__((aligned(16))) char kstack[NPROC][PAGE_SIZE];
@@ -70,6 +69,12 @@ found:
 	memset((void *)p->trapframe, 0, TRAP_PAGE_SIZE);
 	p->context.ra = (uint64)usertrapret;
 	p->context.sp = p->kstack + KSTACK_SIZE;
+
+	uint64 sec = get_cycle() / CPU_FREQ;
+	uint64 usec = (get_cycle() % CPU_FREQ) * 1000000 / CPU_FREQ;
+
+	p->taskinfo.time = (sec * 1000 + usec / 1000) - p->taskinfo.time;
+
 	return p;
 }
 
@@ -84,7 +89,6 @@ void scheduler(void)
 	for (;;) {
 		for (p = pool; p < &pool[NPROC]; p++) {
 			if (p->state == RUNNABLE) {
-				p->taskinfo.time = (get_cycle() / CPU_FREQ) * 1000 + ((get_cycle() % CPU_FREQ) * 1000000 / CPU_FREQ) / 1000;
 				p->taskinfo.status = Running;
 				p->state = RUNNING;
 				current_proc = p;
@@ -114,6 +118,7 @@ void yield(void)
 {
 	current_proc->state = RUNNABLE;
 	current_proc->taskinfo.status = Ready;
+
 	sched();
 }
 
@@ -128,6 +133,7 @@ void freeproc(struct proc *p)
 void exit(int code)
 {
 	struct proc *p = curr_proc();
+
 	infof("proc %d exit with %d", p->pid, code);
 	freeproc(p);
 	finished();
