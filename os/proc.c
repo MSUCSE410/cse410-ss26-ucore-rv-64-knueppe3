@@ -73,7 +73,7 @@ found:
 	uint64 sec = get_cycle() / CPU_FREQ;
 	uint64 usec = (get_cycle() % CPU_FREQ) * 1000000 / CPU_FREQ;
 
-	p->taskinfo.time = (sec * 1000 + usec / 1000) - p->taskinfo.time;
+	p->taskinfo.time = (sec * 1000 + usec / 1000);
 
 	return p;
 }
