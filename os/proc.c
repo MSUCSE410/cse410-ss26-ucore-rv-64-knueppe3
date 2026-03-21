@@ -1,7 +1,10 @@
 #include "proc.h"
 #include "defs.h"
 #include "loader.h"
+#include "log.h"
+#include "riscv.h"
 #include "trap.h"
+#include "timer.h"
 #include "vm.h"
 #include "queue.h"
 
@@ -32,6 +35,8 @@ void proc_init()
 		p->state = UNUSED;
 		p->kstack = (uint64)kstack[p - pool];
 		p->trapframe = (struct trapframe *)trapframe[p - pool];
+		p->taskinfo.status = UnInit;
+		p->taskinfo.time = 0;
 	}
 	idle.kstack = (uint64)boot_stack_top;
 	idle.pid = IDLE_PID;
@@ -79,6 +84,7 @@ found:
 	// init proc
 	p->pid = allocpid();
 	p->state = USED;
+	p->taskinfo.status = Ready;
 	p->ustack = 0;
 	p->max_page = 0;
 	p->parent = NULL;
@@ -89,6 +95,11 @@ found:
 	memset((void *)p->trapframe, 0, TRAP_PAGE_SIZE);
 	p->context.ra = (uint64)usertrapret;
 	p->context.sp = p->kstack + KSTACK_SIZE;
+
+	uint64 sec = get_cycle() / CPU_FREQ;
+	uint64 usec = (get_cycle() % CPU_FREQ) * 1000000 / CPU_FREQ;
+
+	p->taskinfo.time = (sec * 1000 + usec / 1000);
 	return p;
 }
 
@@ -120,6 +131,7 @@ void scheduler()
 		}
 		tracef("swtich to proc %d", p - pool);
 		p->state = RUNNING;
+		p->taskinfo.status = Running;
 		current_proc = p;
 		swtch(&idle.context, &p->context);
 	}
@@ -144,6 +156,7 @@ void sched()
 void yield()
 {
 	current_proc->state = RUNNABLE;
+	current_proc->taskinfo.status = Ready;
 	add_task(current_proc);
 	sched();
 }
@@ -163,6 +176,11 @@ void freeproc(struct proc *p)
 		freepagetable(p->pagetable, p->max_page);
 	p->pagetable = 0;
 	p->state = UNUSED;
+	p->taskinfo.time = 0;
+	for (int i = 0; i < MAX_SYSCALL_NUM; ++i)
+	{
+		p->taskinfo.syscall_time[i] = 0;
+	}
 }
 
 int fork()
@@ -190,6 +208,7 @@ int fork()
 
 int exec(char *name)
 {
+	debugf("name [%s]", name);
 	int id = get_id_by_name(name);
 	if (id < 0)
 		return -1;
@@ -236,6 +255,7 @@ void exit(int code)
 {
 	struct proc *p = curr_proc();
 	p->exit_code = code;
+	p->taskinfo.status = Exited;
 	debugf("proc %d exit with %d\n", p->pid, code);
 	freeproc(p);
 	if (p->parent != NULL) {
@@ -250,4 +270,51 @@ void exit(int code)
 		}
 	}
 	sched();
+}
+
+// Spawns a new process
+int spawn(char* filename)
+{
+	struct proc* new_process;
+	struct proc* curr_process = curr_proc();
+	
+	// alloc proc
+	if ((new_process = allocproc()) == 0)
+	{
+		panic("allocproc\n");
+	}
+
+	// copy memory
+	if(uvmcopy(curr_process->pagetable, new_process->pagetable, curr_process->max_page) < 0)
+	{
+		panic("uvmcopy");
+	}
+
+	new_process->max_page = curr_process->max_page;
+
+	*(new_process->trapframe) = *(curr_process->trapframe);
+
+	// transfer more
+	new_process->trapframe->a0 = 0;
+	new_process->parent = curr_process;
+	new_process->state = RUNNABLE;
+
+    char name[200];
+    copyinstr(curr_process->pagetable, name, (uint64)filename, 200);
+
+	int id = get_id_by_name(name);
+	if (id < 0)
+	{
+		return -1;
+	}
+	freepagetable(new_process->pagetable, new_process->max_page);
+	new_process->max_page = 0;
+	new_process->pagetable = uvmcreate((uint64)new_process->trapframe);
+	if (new_process->pagetable == 0)
+	{
+		panic("pagetable");
+	}
+
+	loader(id, new_process);
+	return new_process->pid;
 }
