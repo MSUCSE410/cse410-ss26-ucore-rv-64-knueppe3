@@ -2,6 +2,7 @@
 #include "console.h"
 #include "const.h"
 #include "defs.h"
+#include "kalloc.h"
 #include "loader.h"
 #include "log.h"
 #include "proc.h"
@@ -108,8 +109,9 @@ int sys_mmap(uint64 start, uint64 len, int port, int flag, int fd)
 	}
 
 	uint64 aligned_length = PGROUNDUP(len);
+	uint64 mapped_size = 0;
 
-	infof("Mapping pages");
+	infof("Mapping pages with aligned_len %d and page size %d", aligned_length, curr_proc()->max_page);
 	while (aligned_length > 0)
 	{
 		void* pa = kalloc();
@@ -118,16 +120,21 @@ int sys_mmap(uint64 start, uint64 len, int port, int flag, int fd)
 			debugf("No physical memory");
 			return -1;
 		}
-		if (mappages(curr_proc()->pagetable, start, PGSIZE, (uint64) pa, PTE_U | (port << 1)) != 0)
+		if (mappages(curr_proc()->pagetable, (uint64) start, PGSIZE, (uint64) pa, PTE_U | (port << 1)) < 0)
 		{
 			debugf("Failed to map a page");
 			return -1;
 		}
 		aligned_length -= PGSIZE;
 		start += PGSIZE;
+		mapped_size += PGSIZE;
 	}	
-	
-	debugf("mmap succeeded");
+	if (aligned_length != 0)
+	{
+		panic("aligned length != 0");
+	}
+	curr_proc()->max_page += mapped_size / PGSIZE;
+	debugf("mmap succeeded with mapped size %d", mapped_size);
 	return 0;
 }
 
@@ -186,6 +193,7 @@ uint64 sys_exec(uint64 va)
 
 uint64 sys_wait(int pid, uint64 va)
 {
+	debugf("sys_wait pid=%d, va=%d", pid, va);
 	struct proc *p = curr_proc();
 	int *code = (int *)useraddr(p->pagetable, va);
 	return wait(pid, code);
@@ -206,8 +214,12 @@ uint64 sys_spawn(uint64 va)
 }
 
 uint64 sys_set_priority(long long prio){
-    // TODO: your job is to complete the sys call
-    return -1;
+	if (prio > 1)
+	{
+		curr_proc()->priority = prio;
+		return prio;
+	}
+	return -1;
 }
 
 
@@ -260,6 +272,9 @@ void syscall()
 		break;
 	case SYS_execve:
 		ret = sys_exec(args[0]);
+		break;
+	case SYS_setpriority:
+		ret = sys_set_priority(args[0]);
 		break;
 	case SYS_wait4:
 		ret = sys_wait(args[0], args[1]);

@@ -41,7 +41,7 @@ void proc_init()
 	idle.kstack = (uint64)boot_stack_top;
 	idle.pid = IDLE_PID;
 	current_proc = &idle;
-	init_queue(&task_queue);
+	//init_queue(&task_queue);
 }
 
 int allocpid()
@@ -63,7 +63,7 @@ struct proc *fetch_task()
 
 void add_task(struct proc *p)
 {
-	push_queue(&task_queue, p - pool);
+	//push_queue(&task_queue, p - pool);
 	debugf("add task %d(pid=%d) to task queue\n", p - pool, p->pid);
 }
 
@@ -100,6 +100,16 @@ found:
 	uint64 usec = (get_cycle() % CPU_FREQ) * 1000000 / CPU_FREQ;
 
 	p->taskinfo.time = (sec * 1000 + usec / 1000);
+
+	for (int i = 0; i < MAX_SYSCALL_NUM; ++i)
+	{
+		p->taskinfo.syscall_time[i] = 0;
+	}
+
+	// priority stuff
+	p->stride = 0;
+	p->priority = 16;
+
 	return p;
 }
 
@@ -110,7 +120,8 @@ found:
 //    via swtch back to the scheduler.
 void scheduler()
 {
-	struct proc *p;
+	struct proc *p = NULL;
+	struct proc *np;
 	for (;;) {
 		/*int has_proc = 0;
 		for (p = pool; p < &pool[NPROC]; p++) {
@@ -125,13 +136,29 @@ void scheduler()
 		if(has_proc == 0) {
 			panic("all app are over!\n");
 		}*/
-		p = fetch_task();
-		if (p == NULL) {
+
+		for (np = pool; np < &pool[NPROC]; ++np)
+		{
+			if ((p == NULL || p->state == ZOMBIE) && np->state == RUNNABLE)
+			{
+				p = np;
+				debugf("p == null, np stride=%d, p stride=%d", np->stride, p->stride);
+			}
+			else if (np->state == RUNNABLE && np->stride < p->stride)
+			{
+				debugf("p != null, np stride=%d, p stride=%d", np->stride, p->stride);
+				p = np;
+			}	
+		}
+		debugf("switch to process %d", p->pid);
+		// shell process is done
+		if (pool->state == UNUSED) {
 			panic("all app are over!\n");
 		}
-		tracef("swtich to proc %d", p - pool);
 		p->state = RUNNING;
 		p->taskinfo.status = Running;
+		int pass = BIG_STRIDE / p->priority;
+		p->stride += pass;
 		current_proc = p;
 		swtch(&idle.context, &p->context);
 	}
@@ -157,7 +184,7 @@ void yield()
 {
 	current_proc->state = RUNNABLE;
 	current_proc->taskinfo.status = Ready;
-	add_task(current_proc);
+	//add_task(current_proc);
 	sched();
 }
 
@@ -176,15 +203,11 @@ void freeproc(struct proc *p)
 		freepagetable(p->pagetable, p->max_page);
 	p->pagetable = 0;
 	p->state = UNUSED;
-	p->taskinfo.time = 0;
-	for (int i = 0; i < MAX_SYSCALL_NUM; ++i)
-	{
-		p->taskinfo.syscall_time[i] = 0;
-	}
 }
 
 int fork()
 {
+	debugf("process forked");
 	struct proc *np;
 	struct proc *p = curr_proc();
 	// Allocate process.
@@ -202,7 +225,7 @@ int fork()
 	np->trapframe->a0 = 0;
 	np->parent = p;
 	np->state = RUNNABLE;
-	add_task(np);
+	//add_task(np);
 	return np->pid;
 }
 
@@ -229,9 +252,9 @@ int wait(int pid, int *code)
 		// Scan through table looking for exited children.
 		havekids = 0;
 		for (np = pool; np < &pool[NPROC]; np++) {
-			if (np->state != UNUSED && np->parent == p &&
-			    (pid <= 0 || np->pid == pid)) {
+			if (np->state != UNUSED && np->parent == p && (pid <= 0 || np->pid == pid)) {
 				havekids = 1;
+				//infof("havekids = 1, zombie=%d", np->state == ZOMBIE);
 				if (np->state == ZOMBIE) {
 					// Found one.
 					np->state = UNUSED;
@@ -239,13 +262,14 @@ int wait(int pid, int *code)
 					*code = np->exit_code;
 					return pid;
 				}
-			}
+			}	
 		}
+		//infof("out of first loop");
 		if (!havekids) {
 			return -1;
 		}
 		p->state = RUNNABLE;
-		add_task(p);
+		//add_task(p);
 		sched();
 	}
 }
@@ -260,6 +284,7 @@ void exit(int code)
 	freeproc(p);
 	if (p->parent != NULL) {
 		// Parent should `wait`
+		infof("made zombie with process %d", p->pid);
 		p->state = ZOMBIE;
 	}
 	// Set the `parent` of all children to NULL
@@ -277,44 +302,34 @@ int spawn(char* filename)
 {
 	struct proc* new_process;
 	struct proc* curr_process = curr_proc();
+
+	int id = get_id_by_name(filename);
+	if (id < 0)
+	{
+		errorf("invalid name %s, id %d", filename, id);
+		return -1;
+	}	
 	
 	// alloc proc
 	if ((new_process = allocproc()) == 0)
 	{
-		panic("allocproc\n");
+		errorf("spawn allocproc\n");
+		return -1;
 	}
-
-	// copy memory
-	if(uvmcopy(curr_process->pagetable, new_process->pagetable, curr_process->max_page) < 0)
-	{
-		panic("uvmcopy");
-	}
-
-	new_process->max_page = curr_process->max_page;
-
-	*(new_process->trapframe) = *(curr_process->trapframe);
 
 	// transfer more
+	*(new_process->trapframe) = *(curr_process->trapframe);
 	new_process->trapframe->a0 = 0;
 	new_process->parent = curr_process;
 	new_process->state = RUNNABLE;
-
-    char name[200];
-    copyinstr(curr_process->pagetable, name, (uint64)filename, 200);
-
-	int id = get_id_by_name(name);
-	if (id < 0)
-	{
-		return -1;
-	}
-	freepagetable(new_process->pagetable, new_process->max_page);
-	new_process->max_page = 0;
-	new_process->pagetable = uvmcreate((uint64)new_process->trapframe);
+ 
 	if (new_process->pagetable == 0)
 	{
-		panic("pagetable");
+		panic("spawn pagetable");
 	}
 
+	debugf("spawned pid=%d", new_process->pid);
+	//add_task(new_process);
 	loader(id, new_process);
 	return new_process->pid;
 }
