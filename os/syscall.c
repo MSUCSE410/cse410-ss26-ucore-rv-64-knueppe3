@@ -135,6 +135,106 @@ uint64 sys_exec(uint64 path, uint64 uargv)
 	return exec(name, (char **)argv);
 }
 
+uint64 sys_task_info(uint64 addr)
+{
+	TaskInfo ti;
+
+	ti.status = curr_proc()->taskinfo.status;
+	for (int i = 0; i < MAX_SYSCALL_NUM; ++i)
+	{
+		ti.syscall_time[i] = curr_proc()->taskinfo.syscall_time[i];
+		if (ti.syscall_time[i] > 0)
+		{
+			debugf("id %d times %d", i, ti.syscall_time[i]);
+		}
+	}
+
+	uint64 sec = get_cycle() / CPU_FREQ;
+	uint64 usec = (get_cycle() % CPU_FREQ) * 1000000 / CPU_FREQ;
+
+	ti.time = (sec * 1000 + usec / 1000) - curr_proc()->taskinfo.time;
+	debugf("time %d", ti.time);
+	debugf("addr %p", useraddr(curr_proc()->pagetable, addr));
+	debugf("time %d", ti.time);
+
+	copyout(curr_proc()->pagetable, addr, (char*) &ti, (uint64) sizeof(TaskInfo));
+
+	return 0;
+}
+
+int sys_mmap(uint64 start, uint64 len, int port, int flag, int fd)
+{
+	debugf("sys_mmap start = %d len = %d port = %d", start, len, port);
+
+	if (len < 1 || len > 1024*1024*1024 || (port & ~0x7) != 0 || (port & 0x7) == 0)
+	{
+		infof("Some error with length or port");
+		return -1;
+	}
+
+	uint64 offset = start & 0xFFF;
+	if (offset != 0)
+	{
+		return -1;
+	}
+
+	uint64 aligned_length = PGROUNDUP(len);
+	uint64 mapped_size = 0;
+
+	infof("Mapping pages with aligned_len %d and page size %d", aligned_length, curr_proc()->max_page);
+	while (aligned_length > 0)
+	{
+		void* pa = kalloc();
+		if ((uint64) pa == 0)
+		{
+			debugf("No physical memory");
+			return -1;
+		}
+		if (mappages(curr_proc()->pagetable, (uint64) start, PGSIZE, (uint64) pa, PTE_U | (port << 1)) < 0)
+		{
+			debugf("Failed to map a page");
+			return -1;
+		}
+		aligned_length -= PGSIZE;
+		start += PGSIZE;
+		mapped_size += PGSIZE;
+	}	
+	if (aligned_length != 0)
+	{
+		panic("aligned length != 0");
+	}
+	curr_proc()->max_page += mapped_size / PGSIZE;
+	debugf("mmap succeeded with mapped size %d", mapped_size);
+	return 0;
+}
+
+int sys_munmap(uint64 start, uint64 len)
+{
+	debugf("sys_munmap start = %d len = %d", start, len);
+
+	pagetable_t table = curr_proc()->pagetable; // pagetable
+	
+	// if start isn't aligned with a page start
+	if (start % PGSIZE != 0)
+	{
+		return -1;
+	}
+	
+	int num_pages = PGROUNDUP(len) / PGSIZE;
+
+	for (uint64 page = start; page < start + num_pages * PGSIZE; page += PGSIZE)
+	{		
+		if(useraddr(table, page) == 0)
+		{
+			debugf("munmap: not mapped");
+			return -1;
+		}
+		uvmunmap(table, page, 1, 0);
+	}
+
+	return 0;
+}
+
 uint64 sys_wait(int pid, uint64 va)
 {
 	struct proc *p = curr_proc();
@@ -144,13 +244,26 @@ uint64 sys_wait(int pid, uint64 va)
 
 uint64 sys_spawn(uint64 va)
 {
-	// TODO: your job is to complete the sys call
+	struct proc* p = curr_proc();
+	char filename[MAX_STR_LEN];
+	
+	int size = copyinstr(p->pagetable, filename, va, MAX_STR_LEN);
+	if (size < 0)
+	{
+		return -1;
+	}
+	int pid = spawn(filename);
+	return pid;
 	return -1;
 }
 
 uint64 sys_set_priority(long long prio)
 {
-	// TODO: your job is to complete the sys call
+	if (prio > 1)
+	{
+		curr_proc()->priority = prio;
+		return prio;
+	}
 	return -1;
 }
 
@@ -239,6 +352,7 @@ void syscall()
 	case SYS_wait4:
 		ret = sys_wait(args[0], args[1]);
 		break;
+
 	case SYS_fstat:
 	    ret = sys_fstat(args[0],args[1]);
 		break;
@@ -249,6 +363,15 @@ void syscall()
 	    ret = sys_unlinkat(args[0],args[1],args[2]);
 	case SYS_spawn:
 		ret = sys_spawn(args[0]);
+		break;
+	case SYS_task_info:
+		ret = sys_task_info(args[0]);
+		break;
+	case SYS_mmap:
+		ret = sys_mmap(args[0], args[1], args[2], args[3], args[4]);
+		break;
+	case SYS_munmap:
+		ret = sys_munmap(args[0], args[1]);
 		break;
 	default:
 		ret = -1;

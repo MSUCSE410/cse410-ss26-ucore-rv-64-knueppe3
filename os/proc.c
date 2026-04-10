@@ -4,6 +4,8 @@
 #include "trap.h"
 #include "vm.h"
 #include "queue.h"
+#include "timer.h"
+#include "riscv.h"
 
 struct proc pool[NPROC];
 __attribute__((aligned(16))) char kstack[NPROC][PAGE_SIZE];
@@ -37,6 +39,8 @@ void proc_init()
 		p->state = UNUSED;
 		p->kstack = (uint64)kstack[p - pool];
 		p->trapframe = (struct trapframe *)trapframe[p - pool];
+		p->taskinfo.status = UnInit;
+		p->taskinfo.time = 0;
 	}
 	idle.kstack = (uint64)boot_stack_top;
 	idle.pid = IDLE_PID;
@@ -96,6 +100,16 @@ found:
 	memset((void *)p->files, 0, sizeof(struct file *) * FD_BUFFER_SIZE);
 	p->context.ra = (uint64)usertrapret;
 	p->context.sp = p->kstack + KSTACK_SIZE;
+
+	uint64 sec = get_cycle() / CPU_FREQ;
+	uint64 usec = (get_cycle() % CPU_FREQ) * 1000000 / CPU_FREQ;
+	p->taskinfo.time = (sec * 1000 + usec / 1000);
+
+	for (int i = 0; i < MAX_SYSCALL_NUM; ++i)
+	{
+		p->taskinfo.syscall_time[i] = 0;
+	}
+
 	return p;
 }
 
@@ -335,4 +349,41 @@ int fdalloc(struct file *f)
 		}
 	}
 	return -1;
+}
+
+// Spawns a new process
+int spawn(char* filename)
+{
+	struct proc* new_process;
+	struct proc* curr_process = curr_proc();
+	struct inode* ip;
+
+	if ((ip = namei(filename)) == 0)
+	{
+		errorf("invalid name %s", filename);
+		return -1;
+	}	
+	
+	// alloc proc
+	if ((new_process = allocproc()) == 0)
+	{
+		errorf("spawn allocproc\n");
+		return -1;
+	}
+
+	// transfer more
+	*(new_process->trapframe) = *(curr_process->trapframe);
+	new_process->trapframe->a0 = 0;
+	new_process->parent = curr_process;
+	new_process->state = RUNNABLE;
+ 
+	if (new_process->pagetable == 0)
+	{
+		panic("spawn pagetable");
+	}
+
+	debugf("spawned pid=%d", new_process->pid);
+	//add_task(new_process);
+	bin_loader(ip, new_process);
+	return new_process->pid;
 }
