@@ -104,11 +104,16 @@ found:
 	uint64 sec = get_cycle() / CPU_FREQ;
 	uint64 usec = (get_cycle() % CPU_FREQ) * 1000000 / CPU_FREQ;
 	p->taskinfo.time = (sec * 1000 + usec / 1000);
+	p->taskinfo.status = Ready;
 
 	for (int i = 0; i < MAX_SYSCALL_NUM; ++i)
 	{
 		p->taskinfo.syscall_time[i] = 0;
 	}
+
+	// priority stuff
+	p->stride = 0;
+	p->priority = 16;
 
 	return p;
 }
@@ -131,7 +136,8 @@ int init_stdio(struct proc *p)
 //    via swtch back to the scheduler.
 void scheduler()
 {
-	struct proc *p;
+	struct proc *p = NULL;
+	struct proc *np;
 	for (;;) {
 		/*int has_proc = 0;
 		for (p = pool; p < &pool[NPROC]; p++) {
@@ -146,12 +152,29 @@ void scheduler()
 		if(has_proc == 0) {
 			panic("all app are over!\n");
 		}*/
-		p = fetch_task();
-		if (p == NULL) {
+
+		for (np = pool; np < &pool[NPROC]; ++np)
+		{
+			if ((p == NULL || p->state == ZOMBIE) && np->state == RUNNABLE)
+			{
+				p = np;
+				debugf("p == null, np stride=%d, p stride=%d", np->stride, p->stride);
+			}
+			else if (np->state == RUNNABLE && np->stride < p->stride)
+			{
+				debugf("p != null, np stride=%d, p stride=%d", np->stride, p->stride);
+				p = np;
+			}	
+		}
+		debugf("switch to process %d", p->pid);
+		// shell process is done
+		if (p == NULL || p->state == UNUSED) {
 			panic("all app are over!\n");
 		}
-		tracef("swtich to proc %d", p - pool);
 		p->state = RUNNING;
+		p->taskinfo.status = Running;
+		int pass = BIG_STRIDE / p->priority;
+		p->stride += pass;
 		current_proc = p;
 		swtch(&idle.context, &p->context);
 	}
@@ -176,7 +199,7 @@ void sched()
 void yield()
 {
 	current_proc->state = RUNNABLE;
-	add_task(current_proc);
+	current_proc->taskinfo.status = Ready;
 	sched();
 }
 
@@ -200,6 +223,7 @@ void freeproc(struct proc *p)
 		}
 	}
 	p->state = UNUSED;
+	p->taskinfo.status = Exited;
 }
 
 int fork()
@@ -230,7 +254,6 @@ int fork()
 	np->trapframe->a0 = 0;
 	np->parent = p;
 	np->state = RUNNABLE;
-	add_task(np);
 	return np->pid;
 }
 
@@ -311,7 +334,6 @@ int wait(int pid, int *code)
 			return -1;
 		}
 		p->state = RUNNABLE;
-		add_task(p);
 		sched();
 	}
 }
@@ -339,12 +361,12 @@ void exit(int code)
 
 int fdalloc(struct file *f)
 {
-	debugf("debugf f = %p, type = %d", f, f->type);
+	debugf("fdalloc f = %p, type = %d", f, f->type);
 	struct proc *p = curr_proc();
 	for (int i = 0; i < FD_BUFFER_SIZE; ++i) {
 		if (p->files[i] == NULL) {
 			p->files[i] = f;
-			debugf("debugf fd = %d, f = %p", i, p->files[i]);
+			debugf("fdalloc fd = %d, f = %p", i, p->files[i]);
 			return i;
 		}
 	}
@@ -371,19 +393,26 @@ int spawn(char* filename)
 		return -1;
 	}
 
+	// transfer files
+	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
+		if (curr_process->files[i] != NULL) {
+			curr_process->files[i]->ref++;
+			new_process->files[i] = curr_process->files[i];
+		}
+	}
+
 	// transfer more
 	*(new_process->trapframe) = *(curr_process->trapframe);
 	new_process->trapframe->a0 = 0;
 	new_process->parent = curr_process;
 	new_process->state = RUNNABLE;
- 
+
 	if (new_process->pagetable == 0)
 	{
 		panic("spawn pagetable");
 	}
 
 	debugf("spawned pid=%d", new_process->pid);
-	//add_task(new_process);
 	bin_loader(ip, new_process);
 	return new_process->pid;
 }

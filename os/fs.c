@@ -114,6 +114,7 @@ struct inode *ialloc(uint dev, short type)
 		if (dip->type == 0) { // a free inode
 			memset(dip, 0, sizeof(*dip));
 			dip->type = type;
+			dip->nlink = 1;
 			bwrite(bp);
 			brelse(bp);
 			return iget(dev, inum);
@@ -136,7 +137,10 @@ void iupdate(struct inode *ip)
 	dip = (struct dinode *)bp->data + ip->inum % IPB;
 	dip->type = ip->type;
 	dip->size = ip->size;
-	// LAB4: you may need to update link count here
+	dip->nlink = ip->nlink;
+
+	debugf("iupdate ip inum = %d", ip->inum);
+
 	memmove(dip->addrs, ip->addrs, sizeof(ip->addrs));
 	bwrite(bp);
 	brelse(bp);
@@ -163,11 +167,14 @@ static struct inode *iget(uint dev, uint inum)
 	if (empty == 0)
 		panic("iget: no inodes");
 
+	debugf("empty ip");
 	ip = empty;
 	ip->dev = dev;
 	ip->inum = inum;
 	ip->ref = 1;
 	ip->valid = 0;
+	ip->nlink = 1;
+
 	return ip;
 }
 
@@ -186,10 +193,17 @@ void ivalid(struct inode *ip)
 	struct dinode *dip;
 	if (ip->valid == 0) {
 		bp = bread(ip->dev, IBLOCK(ip->inum, sb));
+
+		debugf("ivalid ip inum = %d", ip->inum);
+
 		dip = (struct dinode *)bp->data + ip->inum % IPB;
 		ip->type = dip->type;
 		ip->size = dip->size;
-		// LAB4: You may need to get lint count here
+		if (dip->nlink < 0)
+		{
+			dip->nlink = 1;
+		}
+		ip->nlink = dip->nlink;
 		memmove(ip->addrs, dip->addrs, sizeof(ip->addrs));
 		brelse(bp);
 		ip->valid = 1;
@@ -208,14 +222,16 @@ void ivalid(struct inode *ip)
 void iput(struct inode *ip)
 {
 	// LAB4: Unmark the condition and change link count variable name (nlink) if needed
-	if (ip->ref == 1 && ip->valid && 0 /*&& ip->nlink == 0*/) {
+	if (ip->ref == 1 && ip->valid && ip->nlink == 0) {
 		// inode has no links and no other references: truncate and free.
 		itrunc(ip);
 		ip->type = 0;
-		iupdate(ip);
 		ip->valid = 0;
+		ip->inum = 0;
+		debugf("iput finished with no errors, ip destroyed");
 	}
 	ip->ref--;
+	iupdate(ip);
 }
 
 // Inode content
@@ -282,7 +298,6 @@ void itrunc(struct inode *ip)
 		bfree(ip->dev, ip->addrs[NDIRECT]);
 		ip->addrs[NDIRECT] = 0;
 	}
-
 	ip->size = 0;
 	iupdate(ip);
 }
@@ -370,7 +385,8 @@ struct inode *dirlookup(struct inode *dp, char *name, uint *poff)
 		if (de.inum == 0)
 			continue;
 		if (strncmp(name, de.name, DIRSIZ) == 0) {
-			// entry matches path element
+			// entry matches path 
+			debugf("name=%s, de.name=%s", name, de.name);
 			if (poff)
 				*poff = off;
 			inum = de.inum;
@@ -429,6 +445,54 @@ int dirlink(struct inode *dp, char *name, uint inum)
 }
 
 // LAB4: You may want to add dirunlink here
+
+int dirunlink(struct inode *dp, char *name)
+{
+	int off;
+	struct dirent de;
+	struct inode *ip;
+
+	if (dp->type != T_DIR)
+	{
+		return -1;
+	}
+
+	// Check that name is present.
+	if ((ip = dirlookup(dp, name, 0)) == 0) {
+		errorf("path does not exist");
+		iput(ip);
+		return -1;
+	}
+
+	ivalid(ip);
+
+	// Look for the dirent.
+	for (off = 0; off < dp->size; off += sizeof(de)) {
+		if (readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+			panic("dirlink read");
+		if (de.inum == ip->inum)
+			break;
+	}
+
+	// Read the directory entry
+	if (readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+		panic("dirunlink read");
+
+	strncpy(de.name, "", DIRSIZ);
+	de.inum = 0;
+
+	// clear the entry
+	if (writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+		panic("dirlink");
+
+	--ip->nlink;
+	iupdate(ip);
+
+	// release inode
+	iput(ip);
+
+	return 0;
+}
 
 //Return the inode of the root directory
 struct inode *root_dir()

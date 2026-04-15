@@ -82,7 +82,7 @@ static struct inode *create(char *path, short type)
 	if ((ip = ialloc(dp->dev, type)) == 0)
 		panic("create: ialloc");
 
-	tracef("create dinode and inode type = %d\n", type);
+	tracef("create dinode and inode type = %d\n, nlink", type, ip->nlink);
 
 	ivalid(ip);
 	iupdate(ip);
