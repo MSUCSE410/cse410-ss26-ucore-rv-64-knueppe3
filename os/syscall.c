@@ -436,7 +436,6 @@ int sys_unlinkat(int dirfd, uint64 name, uint64 flags)
 
 	// find inode
 	if ((ip = namei(path)) == 0) {
-		errorf("inode does not exist");
 		iput(dp);
 		return -1;
 	}
