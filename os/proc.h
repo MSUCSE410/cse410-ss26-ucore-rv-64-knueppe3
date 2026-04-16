@@ -66,6 +66,11 @@ struct proc {
 	// LAB5: (1) Define your variables for deadlock detect here.
 	//			 You may need a flag to record if detection enabled,
 	//       and some arrays for detection algorithm.
+	int deadlock_detect_enabled;
+
+	int available[LOCK_POOL_SIZE];
+	int allocation[NTHREAD][LOCK_POOL_SIZE];
+	int request[NTHREAD][LOCK_POOL_SIZE];
 };
 
 int cpuid();
@@ -91,5 +96,7 @@ int init_stdio(struct proc *);
 int push_argv(struct proc *, char **);
 // swtch.S
 void swtch(struct context *, struct context *);
+
+int detect_deadlock(struct proc* p);
 
 #endif // PROC_H

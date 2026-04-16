@@ -241,15 +241,6 @@ int sys_waittid(int tid)
 	return t->exit_code;
 }
 
-/*
-*	LAB5: (3) In the TA's reference implementation, here defines funtion
-*					int deadlock_detect(const int available[LOCK_POOL_SIZE],
-*						const int allocation[NTHREAD][LOCK_POOL_SIZE],
-*						const int request[NTHREAD][LOCK_POOL_SIZE])
-*				for both mutex and semaphore detect, you can also
-*				use this idea or just ignore it.
-*/
-
 int sys_mutex_create(int blocking)
 {
 	struct mutex *m = mutex_create(blocking);
@@ -271,6 +262,10 @@ int sys_mutex_lock(int mutex_id)
 	}
 	// LAB5: (4-1) You may want to maintain some variables for detect
 	//       or call your detect algorithm here
+	if (curr_proc()->deadlock_detect_enabled && detect_deadlock(curr_proc()))
+	{
+		curr_proc()->request
+	}
 	mutex_lock(&curr_proc()->mutex_pool[mutex_id]);
 	return 0;
 }
@@ -362,6 +357,12 @@ int sys_condvar_wait(int cond_id, int mutex_id)
 }
 
 // LAB5: (2) you may need to define function enable_deadlock_detect here
+int sys_enable_deadlock_detect(int is_enable)
+{
+	curr_proc()->deadlock_detect_enabled = is_enable;
+
+	return 0;
+}
 
 extern char trap_page[];
 
@@ -454,6 +455,9 @@ void syscall()
 		ret = sys_condvar_wait(args[0], args[1]);
 		break;
 	// LAB5: (2) you may need to add case SYS_enable_deadlock_detect here
+	case SYS_enable_deadlock_detect:
+		ret = sys_enable_deadlock_detect(args[0]);
+		break;
 	default:
 		ret = -1;
 		errorf("unknown syscall %d", id);

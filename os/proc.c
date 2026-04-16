@@ -479,3 +479,71 @@ int fdalloc(struct file *f)
 	}
 	return -1;
 }
+
+/*
+*	LAB5: (3) In the TA's reference implementation, here defines funtion
+*					int deadlock_detect(const int available[LOCK_POOL_SIZE],
+*						const int allocation[NTHREAD][LOCK_POOL_SIZE],
+*						const int request[NTHREAD][LOCK_POOL_SIZE])
+*				for both mutex and semaphore detect, you can also
+*				use this idea or just ignore it.
+*/
+
+int detect_deadlock(struct proc * p)
+{
+	int work[LOCK_POOL_SIZE];
+	int finish[NTHREAD];
+
+	memmove(work, p->available, LOCK_POOL_SIZE);
+
+	for (int i = 0; i < NTHREAD; ++i)
+	{
+		finish[i] = 0;
+	}
+
+	while(1)
+	{
+		int found = 0;
+
+		for (int i = 0; i < NTHREAD; ++i)
+		{
+			if(!finish[i])
+			{
+				int runnable = 1;
+				for (int j = 0; j < LOCK_POOL_SIZE; ++j)
+				{
+					if (p->request[i][j] > work[j])
+					{
+						runnable = 0;
+						break;
+					}
+				}
+
+				if (runnable)
+				{
+					for (int j = 0; j < LOCK_POOL_SIZE; ++j)
+					{
+						work[j] += p->allocation[i][j];
+					}
+					finish[i] = 1;
+					found = 1;
+				}
+			}
+		}
+		if (!found)
+		{
+			break;
+		}
+	}
+
+	for (int i = 0; i < NTHREAD; ++i)
+	{
+		if (!finish[i])
+		{
+			return 1; // deadlock occurs
+		}
+	}
+
+	// safe to proceed
+	return 0;
+}
