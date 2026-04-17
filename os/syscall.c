@@ -243,6 +243,8 @@ int sys_waittid(int tid)
 
 int sys_mutex_create(int blocking)
 {
+	debugf("sys_mutex_create blocking=%d", blocking);
+
 	struct mutex *m = mutex_create(blocking);
 	if (m == NULL) {
 		errorf("fail to create mutex: out of resource");
@@ -250,72 +252,151 @@ int sys_mutex_create(int blocking)
 	}
 	// LAB5: (4-1) You may want to maintain some variables for detect here
 	int mutex_id = m - curr_proc()->mutex_pool;
+	if (curr_proc()->deadlock_detect_enabled)
+	{
+		curr_proc()->available[mutex_id] = 1;
+	}
+
 	debugf("create mutex %d", mutex_id);
 	return mutex_id;
 }
 
 int sys_mutex_lock(int mutex_id)
 {
+	debugf("sys_mutex_lock id=%d", mutex_id);
+
 	if (mutex_id < 0 || mutex_id >= curr_proc()->next_mutex_id) {
 		errorf("Unexpected mutex id %d", mutex_id);
 		return -1;
 	}
+
+	int tid = curr_thread()->tid;
+
 	// LAB5: (4-1) You may want to maintain some variables for detect
 	//       or call your detect algorithm here
-	if (curr_proc()->deadlock_detect_enabled && detect_deadlock(curr_proc()))
+	if (curr_proc()->deadlock_detect_enabled)
 	{
-		curr_proc()->request
+		curr_proc()->request[tid][mutex_id] = 1;
+		if (detect_deadlock(curr_proc()))
+		{
+			curr_proc()->request[tid][mutex_id] = 0;
+			return -0xDEAD;
+		}
 	}
+
 	mutex_lock(&curr_proc()->mutex_pool[mutex_id]);
+
+	if (curr_proc()->deadlock_detect_enabled)
+	{
+		curr_proc()->request[tid][mutex_id] = 0;
+		curr_proc()->allocation[tid][mutex_id] = 1;
+		curr_proc()->available[mutex_id] = 0;
+	}
+
 	return 0;
 }
 
 int sys_mutex_unlock(int mutex_id)
 {
+	debugf("sys_mutex_unlock id=%d", mutex_id);
+
 	if (mutex_id < 0 || mutex_id >= curr_proc()->next_mutex_id) {
 		errorf("Unexpected mutex id %d", mutex_id);
 		return -1;
 	}
 	// LAB5: (4-1) You may want to maintain some variables for detect here
+	int tid = curr_thread()->tid;
+
+	if (curr_proc()->deadlock_detect_enabled)
+	{
+		curr_proc()->allocation[tid][mutex_id] = 0;
+		curr_proc()->available[mutex_id] = 1;
+	}
+
 	mutex_unlock(&curr_proc()->mutex_pool[mutex_id]);
 	return 0;
 }
 
 int sys_semaphore_create(int res_count)
 {
+	debugf("sys_semaphore_create res_count=%d", res_count);
+
 	struct semaphore *s = semaphore_create(res_count);
 	if (s == NULL) {
 		errorf("fail to create semaphore: out of resource");
 		return -1;
 	}
-	// LAB5: (4-2) You may want to maintain some variables for detect here
+
 	int sem_id = s - curr_proc()->semaphore_pool;
+
+	// LAB5: (4-2) You may want to maintain some variables for detect here
+	if (curr_proc()->deadlock_detect_enabled)
+	{
+		curr_proc()->available[sem_id] = res_count;
+	}
+
 	debugf("create semaphore %d", sem_id);
 	return sem_id;
 }
 
 int sys_semaphore_up(int semaphore_id)
 {
+	debugf("sys_semaphore_up id=%s", semaphore_id);
+
 	if (semaphore_id < 0 ||
 	    semaphore_id >= curr_proc()->next_semaphore_id) {
 		errorf("Unexpected semaphore id %d", semaphore_id);
 		return -1;
 	}
+
 	// LAB5: (4-2) You may want to maintain some variables for detect here
+
+	struct proc * p = curr_proc();
+	int tid = curr_thread()->tid;
+
+	if (p->deadlock_detect_enabled) {
+		p->allocation[tid][semaphore_id]--;
+		p->available[semaphore_id]++;
+	}
+
 	semaphore_up(&curr_proc()->semaphore_pool[semaphore_id]);
 	return 0;
 }
 
 int sys_semaphore_down(int semaphore_id)
 {
+	debugf("sys_semaphore_down id=%s", semaphore_id);
+
 	if (semaphore_id < 0 ||
 	    semaphore_id >= curr_proc()->next_semaphore_id) {
 		errorf("Unexpected semaphore id %d", semaphore_id);
 		return -1;
 	}
+
+
+	int tid = curr_thread()->tid;
+	struct proc * p = curr_proc();
+
+
+	if (p->deadlock_detect_enabled) {
+		p->request[tid][semaphore_id]++;
+
+		if (detect_deadlock(p)) {
+			p->request[tid][semaphore_id]--;
+			return -0xDEAD;
+		}
+	}
+
 	// LAB5: (4-2) You may want to maintain some variables for detect
 	//       or call your detect algorithm here
 	semaphore_down(&curr_proc()->semaphore_pool[semaphore_id]);
+
+	if (p->deadlock_detect_enabled) {
+		p->request[tid][semaphore_id]--;
+		p->allocation[tid][semaphore_id]++;
+		p->available[semaphore_id]--;
+	}
+
 	return 0;
 }
 
@@ -359,6 +440,13 @@ int sys_condvar_wait(int cond_id, int mutex_id)
 // LAB5: (2) you may need to define function enable_deadlock_detect here
 int sys_enable_deadlock_detect(int is_enable)
 {
+	debugf("sys_enable_deadlock_detect is_enable=%d", is_enable);
+
+	if (is_enable != 0 && is_enable != 1)
+	{
+		errorf("invalid parameter for is_enable");
+		return -1;
+	}
 	curr_proc()->deadlock_detect_enabled = is_enable;
 
 	return 0;
@@ -373,8 +461,8 @@ void syscall()
 	uint64 args[6] = { trapframe->a0, trapframe->a1, trapframe->a2,
 			   trapframe->a3, trapframe->a4, trapframe->a5 };
 	if (id != SYS_write && id != SYS_read && id != SYS_sched_yield) {
-		debugf("syscall %d args = [%x, %x, %x, %x, %x, %x]", id,
-		       args[0], args[1], args[2], args[3], args[4], args[5]);
+		//debugf("syscall %d args = [%x, %x, %x, %x, %x, %x]", id,
+		       //args[0], args[1], args[2], args[3], args[4], args[5]);
 	}
 	switch (id) {
 	case SYS_write:
@@ -464,6 +552,6 @@ void syscall()
 	}
 	curr_thread()->trapframe->a0 = ret;
 	if (id != SYS_write && id != SYS_read && id != SYS_sched_yield) {
-		debugf("syscall %d ret %d", id, ret);
+		//debugf("syscall %d ret %d", id, ret);
 	}
 }

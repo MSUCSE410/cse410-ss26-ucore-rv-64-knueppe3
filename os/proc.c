@@ -143,6 +143,11 @@ found:
 	p->next_semaphore_id = 0;
 	p->next_condvar_id = 0;
 	// LAB5: (1) you may initialize your new proc variables here
+	memset(p->available, 0, sizeof(p->available));
+	memset(p->allocation, 0, sizeof(p->allocation));
+	memset(p->request, 0, sizeof(p->request));
+	p->deadlock_detect_enabled = 0;
+	
 	return p;
 }
 
@@ -491,59 +496,49 @@ int fdalloc(struct file *f)
 
 int detect_deadlock(struct proc * p)
 {
-	int work[LOCK_POOL_SIZE];
-	int finish[NTHREAD];
+    int work[LOCK_POOL_SIZE];
+    int finish[NTHREAD];
 
-	memmove(work, p->available, LOCK_POOL_SIZE);
+    for (int j = 0; j < LOCK_POOL_SIZE; j++) {
+        work[j] = p->available[j];
+	}
 
-	for (int i = 0; i < NTHREAD; ++i)
-	{
+	for (int i = 0; i < NTHREAD; ++i) {
 		finish[i] = 0;
 	}
 
-	while(1)
-	{
-		int found = 0;
+	int progress = 1;
 
-		for (int i = 0; i < NTHREAD; ++i)
-		{
-			if(!finish[i])
-			{
-				int runnable = 1;
-				for (int j = 0; j < LOCK_POOL_SIZE; ++j)
-				{
-					if (p->request[i][j] > work[j])
-					{
-						runnable = 0;
-						break;
-					}
-				}
+    while (progress) {
+		progress = 0;
 
-				if (runnable)
-				{
-					for (int j = 0; j < LOCK_POOL_SIZE; ++j)
-					{
-						work[j] += p->allocation[i][j];
-					}
-					finish[i] = 1;
-					found = 1;
-				}
-			}
+        for (int i = 0; i < NTHREAD; i++) {
+            if (finish[i])
+                continue;
+
+            int ok = 1;
+            for (int j = 0; j < LOCK_POOL_SIZE; j++) {
+                if (p->request[i][j] > work[j]) {
+                    ok = 0;
+                    break;
+                }
+            }
+
+            if (ok) {
+                for (int j = 0; j < LOCK_POOL_SIZE; j++)
+                    work[j] += p->allocation[i][j];
+
+                finish[i] = 1;
+				progress = 1;
+            }
+        }
+    }
+
+    for (int i = 0; i < NTHREAD; i++) {
+        if (!finish[i]) {
+			debugf("%d cannot finish", i);
+            return 1;
 		}
-		if (!found)
-		{
-			break;
-		}
-	}
-
-	for (int i = 0; i < NTHREAD; ++i)
-	{
-		if (!finish[i])
-		{
-			return 1; // deadlock occurs
-		}
-	}
-
-	// safe to proceed
+    }
 	return 0;
 }
